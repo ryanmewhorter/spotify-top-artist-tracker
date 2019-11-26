@@ -15,6 +15,11 @@ namespace SpotifyAPI.Web.Examples.CLI
     {
         private const TimeRangeType _defaultTimeRange = TimeRangeType.ShortTerm;
         private const string repository = "C:\\dev\\sandbox\\csharp\\top_artist_history";
+        private const int NEW_ARTIST_RANK_VALUE = Int32.MinValue + 1;
+        private const int REMOVED_ARTIST_RANK_VALUE = Int32.MinValue;
+        private const string NO_CHANGE_TEXT = "--";
+        private const string NEW_ARTIST_TEXT = "new";
+        private const string REMOVED_ARTIST_TEXT = "removed";
         private static string _clientId = "";
         private static string _secretId = "";
 
@@ -67,14 +72,8 @@ namespace SpotifyAPI.Web.Examples.CLI
             string name = string.IsNullOrEmpty(profile.DisplayName) ? profile.Id : profile.DisplayName;
             Console.WriteLine($"Hello there, {name}!");
 
-            Console.WriteLine("\nToday's top artists:");
-            Console.WriteLine("====================================================");
-            Console.WriteLine("{0, -10} {1, -40}", "Rank", "Artist Name");
-            Console.WriteLine("====================================================");
             var topArtistsToday = await GetTopArtistsRankings(api);
             SaveTopArtistsFile(topArtistsToday);
-            topArtistsToday.ForEach(artist => Console.WriteLine("{0, -10} {1, -40}", artist.Rank, artist.Name));
-            Dictionary<string, int> topArtistsTodayNameRankMapping = ConvertTopArtistsListToDictionary(topArtistsToday);
 
             var topArtistsYesterday = GetTopArtistsRankings(DateTime.Today.AddDays(-1));
             if (topArtistsYesterday == null)
@@ -82,53 +81,88 @@ namespace SpotifyAPI.Web.Examples.CLI
                 Console.WriteLine("No artists from yesterday to compare with.");
                 return;
             }
-            Dictionary<string, int> topArtistsYesterdayNameRankMapping = ConvertTopArtistsListToDictionary(topArtistsYesterday);
+            IDictionary<string, int> topArtistsTodayNameRankMapping = ConvertTopArtistsListToDictionary(topArtistsToday);
+            IDictionary<string, int> topArtistsYesterdayNameRankMapping = ConvertTopArtistsListToDictionary(topArtistsYesterday);
+            IDictionary<string, int> rankingChanges = CompareTopArtistRankings(topArtistsTodayNameRankMapping, topArtistsYesterdayNameRankMapping);
 
-            Console.WriteLine("\nChanges in Artist Rankings since yesterday:");
-            Console.WriteLine("====================================================");
-            Console.WriteLine("{0, -40} {1}", "Artist Name", "Change");
-            Console.WriteLine("====================================================");
+            Console.WriteLine("\nToday's top artists:");
+            Console.WriteLine("===========================================================================");
+            Console.WriteLine("{0, -10} {1, -40} {2, -10}", "Rank", "Artist Name", "Change from Yesterday");
+            Console.WriteLine("===========================================================================");
             foreach (KeyValuePair<string, int> entry in topArtistsTodayNameRankMapping)
             {
+                Console.WriteLine("{0, -10} {1, -40} {2, -10}", entry.Value, entry.Key, FormatRankChange(rankingChanges[entry.Key]));
+                rankingChanges.Remove(entry.Key);
+            }
+            foreach (KeyValuePair<string, int> entry in rankingChanges)
+            {
+                Console.WriteLine("{0, -10} {1, -40} {2, -10}", "", entry.Key, REMOVED_ARTIST_TEXT);
+            }
+            
+        }
+
+        private static string FormatRankChange(int rankChange)
+        {
+            if (rankChange == NEW_ARTIST_RANK_VALUE)
+            {
+                return NEW_ARTIST_TEXT;
+            }
+            else if (rankChange == REMOVED_ARTIST_RANK_VALUE)
+            {
+                return REMOVED_ARTIST_TEXT;
+            }
+            else if (rankChange > 0)
+            {
+                return "+" + rankChange;
+            }
+            else if (rankChange == 0)
+            {
+                return NO_CHANGE_TEXT;
+            }
+            else
+            {
+                return rankChange.ToString();
+            }
+        }
+
+        private static IDictionary<string, int> CompareTopArtistRankings(
+            IDictionary<string, int> rankingsA, IDictionary<string, int> rankingsB)
+        {
+            Dictionary<string, int> rankingChanges = new Dictionary<string, int>();
+            foreach (KeyValuePair<string, int> entry in rankingsA)
+            {
                 String artistName = entry.Key;
-                int artistRankToday = entry.Value;
-                int artistRankYesterday;
-                if (topArtistsYesterdayNameRankMapping.TryGetValue(artistName, out artistRankYesterday))
+                int artistRankA = entry.Value;
+                int artistRankB;
+                if (rankingsB.TryGetValue(artistName, out artistRankB))
                 {
-                    int difference = artistRankToday - artistRankYesterday;
-                    if (difference < 0)
-                    {
-                        Console.WriteLine("{0, -40} {1}", artistName, difference);
-                    } 
-                    else if (difference > 0)
-                    {
-                        Console.WriteLine("{0, -40} +{1}", artistName, difference);
-                    }
-                    else
-                    {
-                        Console.WriteLine("{0, -40}  0", artistName);
-                    }
-                } 
+                    rankingChanges.Add(artistName, artistRankA - artistRankB);
+                }
                 else
                 {
                     // Artist exists on today's top artists, but not yesterday's.
-                    Console.WriteLine("{0, -40}  NEW", artistName);
+                    rankingChanges.Add(artistName, NEW_ARTIST_RANK_VALUE);
                 }
             }
 
-            foreach (KeyValuePair<string, int> entry in topArtistsYesterdayNameRankMapping)
+            foreach (KeyValuePair<string, int> entry in rankingsB)
             {
                 String artistName = entry.Key;
-                if (!topArtistsTodayNameRankMapping.ContainsKey(artistName))
+                if (!rankingsA.ContainsKey(artistName))
                 {
                     // Artist exists on yesterday's top artists, but not today's.
-                    Console.WriteLine("{0, -40}  FELL OFF", artistName);
+                    rankingChanges.Add(artistName, REMOVED_ARTIST_RANK_VALUE);
                 }
             }
 
+            // Sort dictionary by ranking change descending using LINQ
+            return (from entry in rankingChanges
+                   orderby entry.Value descending
+                   select entry)
+                   .ToDictionary(pair => pair.Key, pair => pair.Value);
         }
 
-        private static async Task<List<ArtistRanking>> GetTopArtistsRankings(SpotifyWebAPI api)
+        private static async Task<IEnumerable<ArtistRanking>> GetTopArtistsRankings(SpotifyWebAPI api)
         {
             // Collect Top Artist data from Spotify API and fill list with it.
             List<ArtistRanking> topArtists = new List<ArtistRanking>();
@@ -141,7 +175,7 @@ namespace SpotifyAPI.Web.Examples.CLI
             return topArtists;
         }
 
-        private static List<ArtistRanking> GetTopArtistsRankings(DateTime date)
+        private static IEnumerable<ArtistRanking> GetTopArtistsRankings(DateTime date)
         {
             var artistNameRankMapping = new Dictionary<string, int>();
             var fileLocation = GetTopArtistsFileLocationByDate(date);
@@ -157,14 +191,17 @@ namespace SpotifyAPI.Web.Examples.CLI
             }
         }
 
-        private static Dictionary<string, int> ConvertTopArtistsListToDictionary(List<ArtistRanking> topArtists)
+        private static IDictionary<string, int> ConvertTopArtistsListToDictionary(IEnumerable<ArtistRanking> topArtists)
         {
             var topArtistsDictionary = new Dictionary<string, int>();
-            topArtists.ForEach(artist => topArtistsDictionary.Add(artist.Name, artist.Rank));
+            foreach (var artist in topArtists)
+            {
+                topArtistsDictionary.Add(artist.Name, artist.Rank);
+            }
             return topArtistsDictionary;
         }
 
-        private static void SaveTopArtistsFile(List<ArtistRanking> topArtists)
+        private static void SaveTopArtistsFile(IEnumerable<ArtistRanking> topArtists)
         {
             // Using CsvHelper, write list of Artist Rankings to a CSV file
             using (var writer = new StreamWriter(GetTopArtistsFileLocationByDate(DateTime.Today)))
